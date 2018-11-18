@@ -198,7 +198,7 @@ pub struct Source {
     pub card: Option<CardShort>,
     pub client_secret: Option<String>,
     pub code_verification: Option<CodeVerification>,
-    pub created: Timestamp,
+    pub created: Option<Timestamp>,
     pub currency: Option<Currency>,
     pub flow: Option<SourceFlow>,
     pub livemode: bool,

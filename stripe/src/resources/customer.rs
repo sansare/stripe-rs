@@ -60,7 +60,7 @@ pub struct Customer {
     pub id: String,
     pub account_balance: i64,
     pub business_vat_id: Option<String>,
-    pub created: u64,
+    pub created: Option<Timestamp>,
     pub currency: Option<Currency>,
     pub default_source: Option<PaymentSourceId>,
     pub delinquent: bool,

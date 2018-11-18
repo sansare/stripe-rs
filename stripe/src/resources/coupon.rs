@@ -9,7 +9,7 @@ pub struct Coupon {
     pub id: String,
     pub object: String,
     pub amount_off: Option<u64>,
-    pub created: Timestamp,
+    pub created: Option<Timestamp>,
     pub currency: Option<Currency>,
     pub duration: String, // (forever, once, repeating)
     pub duration_in_months: Option<u64>,
@@ -28,4 +28,3 @@ impl Identifiable for Coupon {
         &self.id
     }
 }
-
