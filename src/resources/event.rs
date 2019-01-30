@@ -222,7 +222,7 @@ impl Webhook {
         payload: String,
         sig: String,
         secret: String,
-    ) -> Result<Event, WebhookError> {
+    ) -> Result<serde_json::Value, WebhookError> {
         let headers: Vec<String> = sig.split(',').map(|s| s.trim().to_string()).collect();
 
         // Prepare the signed payload
