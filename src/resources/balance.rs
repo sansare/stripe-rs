@@ -1,3 +1,4 @@
+use crate::config::{Client, Response};
 use crate::params::{Identifiable, List, Timestamp};
 use crate::resources::{Currency, PaymentSource};
 use serde_derive::{Deserialize, Serialize};
@@ -48,5 +49,14 @@ pub struct BalanceTransaction {
 impl Identifiable for BalanceTransaction {
     fn id(&self) -> &str {
         &self.id
+    }
+}
+
+impl BalanceTransaction {
+    /// Retrieves the balance transaction with the given ID.
+    ///
+    /// For more details see [https://stripe.com/docs/api/balance/balance_transaction_retrieve](https://stripe.com/docs/api/balance/balance_transaction_retrieve).
+    pub fn retrieve(client: &Client, balance_transaction_id: &str) -> Response<BalanceTransaction> {
+        client.get(&format!("/balance/history/{}", balance_transaction_id))
     }
 }
