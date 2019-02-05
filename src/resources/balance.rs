@@ -6,7 +6,7 @@ use serde_derive::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FeeDetails {
     pub amount: u64,
-    pub application: String,
+    pub application: Option<String>,
     pub currency: Currency,
     pub description: String,
     #[serde(rename = "type")]
@@ -36,7 +36,7 @@ pub struct BalanceTransaction {
     pub available_on: Timestamp,
     pub created: Timestamp,
     pub currency: Currency,
-    pub description: String,
+    pub description: Option<String>,
     pub fee: u64,
     pub fee_details: Vec<FeeDetails>,
     pub net: u64,
