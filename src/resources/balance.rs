@@ -1,5 +1,5 @@
 use crate::config::{Client, Response};
-use crate::params::{Identifiable, List, Timestamp};
+use crate::params::{Identifiable, Timestamp};
 use crate::resources::{Currency, PaymentSource};
 use serde_derive::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ pub struct BalanceTransaction {
     pub currency: Currency,
     pub description: String,
     pub fee: u64,
-    pub fee_details: List<FeeDetails>,
+    pub fee_details: Vec<FeeDetails>,
     pub net: u64,
     pub source: PaymentSource,
     pub status: String,
