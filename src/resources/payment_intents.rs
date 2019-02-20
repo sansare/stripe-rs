@@ -1,6 +1,6 @@
 use crate::config::{Client, Response};
 use crate::params::{Identifiable, List, Metadata, RangeQuery, Timestamp};
-use crate::resources::{Charge, Currency, ShippingDetails};
+use crate::resources::{Charge, Currency, PaymentSource, ShippingDetails};
 use serde_derive::{Deserialize, Serialize};
 
 /// The resource representing a Stripe PaymentError object.
@@ -16,7 +16,7 @@ pub struct PaymentError {
     pub doc_url: Option<String>,
     pub message: Option<String>,
     pub param: Option<String>,
-    pub source: Option<String>,
+    pub source: Option<PaymentSource>,
 }
 
 /// The resource representing a Stripe PaymentErrorType object.
