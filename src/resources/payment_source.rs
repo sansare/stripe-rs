@@ -1,6 +1,7 @@
-use crate::ids::{SourceId, TokenId};
-use crate::params::Identifiable;
-use crate::resources::{BankAccount, BankAccountParams, Card, CardParams, Source};
+use crate::ids::{PaymentSourceId, SourceId, TokenId};
+use crate::params::Object;
+use crate::resources::{Account, AlipayAccount, BankAccount, Card, Currency, Source};
+use serde::ser::SerializeStruct;
 use serde_derive::{Deserialize, Serialize};
 
 /// A PaymentSourceParams represents all of the supported ways that can
@@ -10,7 +11,7 @@ use serde_derive::{Deserialize, Serialize};
 /// Not to be confused with `SourceParams` which is used by `Source::create`
 /// to create a source that is not necessarily attached to a customer.
 #[derive(Clone, Debug)]
-pub enum PaymentSourceParams<'a> {
+pub enum PaymentSourceParams {
     /// Creates a payment method (e.g. card or bank account) from tokenized data,
     /// using a token typically received from Stripe Elements.
     Token(TokenId),
@@ -18,43 +19,15 @@ pub enum PaymentSourceParams<'a> {
     /// Attach an existing source to an existing customer or
     /// create a new customer from an existing source.
     Source(SourceId),
-
-    /// Creates a `Card` payment method from the full card information
-    /// (e.g. card number, expiration, etc).
-    ///
-    /// You usually want to use a `TokenId` received from
-    /// [Stripe Elements](https://stripe.com/docs/stripe-js)
-    /// instead.
-    Card(CardParams<'a>),
-
-    /// Creates a `BankAccount` payment method from the full bank information
-    /// (e.g. account number, expiration, etc).
-    ///
-    /// You usually want to use a `TokenId` received from
-    /// [Stripe Elements](https://stripe.com/docs/stripe-js)
-    /// instead.
-    BankAccount(BankAccountParams<'a>),
 }
 
-impl<'de> ::serde::Deserialize<'de> for PaymentSourceParams<'de> {
+impl<'de> ::serde::Deserialize<'de> for PaymentSourceParams {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: ::serde::de::Deserializer<'de>,
     {
         use serde::de::{Deserialize, Error};
         use serde::private::de::{Content, ContentRefDeserializer};
-
-        #[derive(Deserialize)]
-        pub struct Any {}
-
-        #[derive(Deserialize)]
-        #[serde(tag = "object", rename_all = "snake_case")]
-        pub enum PaymentSourceObjectType {
-            Card(Any),
-            BankAccount(Any),
-        }
-
-        // Try deserializing the untagged variants first
         let content = <Content<'_> as Deserialize>::deserialize(deserializer)?;
         let deserializer = ContentRefDeserializer::<D::Error>::new(&content);
         if let Ok(ok) = <SourceId as Deserialize>::deserialize(deserializer) {
@@ -65,47 +38,18 @@ impl<'de> ::serde::Deserialize<'de> for PaymentSourceParams<'de> {
             return Ok(PaymentSourceParams::Token(ok));
         }
 
-        // Deserialize just the tag of one of the tagged variants, then deserialize the matching variant
-        let deserializer = ContentRefDeserializer::<D::Error>::new(&content);
-        match <PaymentSourceObjectType as Deserialize>::deserialize(deserializer) {
-            Ok(PaymentSourceObjectType::Card(_)) => {
-                let deserializer = ContentRefDeserializer::<D::Error>::new(&content);
-                return <CardParams<'_> as Deserialize>::deserialize(deserializer)
-                    .map(PaymentSourceParams::Card);
-            }
-            Ok(PaymentSourceObjectType::BankAccount(_)) => {
-                let deserializer = ContentRefDeserializer::<D::Error>::new(&content);
-                return <BankAccountParams<'_> as Deserialize>::deserialize(deserializer)
-                    .map(PaymentSourceParams::BankAccount);
-            }
-            _ => {}
-        }
-
         Err(Error::custom("data did not match any variant of enum PaymentSourceParams"))
     }
 }
 
-impl<'a> ::serde::Serialize for PaymentSourceParams<'a> {
+impl<'a> ::serde::Serialize for PaymentSourceParams {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: ::serde::ser::Serializer,
     {
-        #[derive(Serialize)]
-        #[serde(tag = "object", rename_all = "snake_case")]
-        enum PaymentSourceTagged<'a> {
-            Card(&'a CardParams<'a>),
-            BankAccount(&'a BankAccountParams<'a>),
-        }
-
         match self {
             PaymentSourceParams::Source(id) => id.serialize(serializer),
             PaymentSourceParams::Token(id) => id.serialize(serializer),
-            PaymentSourceParams::Card(card) => {
-                PaymentSourceTagged::Card(card).serialize(serializer)
-            }
-            PaymentSourceParams::BankAccount(account) => {
-                PaymentSourceTagged::BankAccount(account).serialize(serializer)
-            }
         }
     }
 }
@@ -122,15 +66,81 @@ impl<'a> ::serde::Serialize for PaymentSourceParams<'a> {
 pub enum PaymentSource {
     Card(Card),
     Source(Source),
+    Account(Account),
     BankAccount(BankAccount),
+    AlipayAccount(AlipayAccount),
 }
 
-impl Identifiable for PaymentSource {
-    fn id(&self) -> &str {
+impl Object for PaymentSource {
+    type Id = PaymentSourceId;
+    fn id(&self) -> Self::Id {
         match self {
-            PaymentSource::Card(c) => c.id(),
-            PaymentSource::Source(s) => s.id(),
-            PaymentSource::BankAccount(b) => b.id(),
+            PaymentSource::Card(x) => PaymentSourceId::Card(x.id()),
+            PaymentSource::Source(x) => PaymentSourceId::Source(x.id()),
+            PaymentSource::Account(x) => PaymentSourceId::Account(x.id()),
+            PaymentSource::BankAccount(x) => PaymentSourceId::BankAccount(x.id()),
+            PaymentSource::AlipayAccount(x) => PaymentSourceId::AlipayAccount(x.id()),
         }
+    }
+    fn object(&self) -> &'static str {
+        match self {
+            PaymentSource::Card(x) => x.object(),
+            PaymentSource::Source(x) => x.object(),
+            PaymentSource::Account(x) => x.object(),
+            PaymentSource::BankAccount(x) => x.object(),
+            PaymentSource::AlipayAccount(x) => x.object(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct BankAccountParams<'a> {
+    pub country: &'a str,
+    pub currency: Currency,
+    pub account_holder_name: Option<&'a str>,
+    pub account_holder_type: Option<&'a str>,
+    pub routing_number: Option<&'a str>,
+    pub account_number: &'a str,
+}
+
+impl<'a> serde::ser::Serialize for BankAccountParams<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        let mut s = serializer.serialize_struct("BankAccountParams", 6)?;
+        s.serialize_field("object", "bank_account")?;
+        s.serialize_field("country", &self.country)?;
+        s.serialize_field("currency", &self.currency)?;
+        s.serialize_field("account_holder_name", &self.account_holder_name)?;
+        s.serialize_field("routing_number", &self.routing_number)?;
+        s.serialize_field("account_number", &self.account_number)?;
+        s.end()
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CardParams<'a> {
+    pub exp_month: &'a str, // eg. "12"
+    pub exp_year: &'a str,  // eg. "17" or 2017"
+
+    pub number: &'a str,       // card number
+    pub name: Option<&'a str>, // cardholder's full name
+    pub cvc: Option<&'a str>,  // card security code
+}
+
+impl<'a> serde::ser::Serialize for CardParams<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        let mut s = serializer.serialize_struct("CardParams", 6)?;
+        s.serialize_field("object", "card")?;
+        s.serialize_field("exp_month", &self.exp_month)?;
+        s.serialize_field("exp_year", &self.exp_year)?;
+        s.serialize_field("number", &self.number)?;
+        s.serialize_field("name", &self.name)?;
+        s.serialize_field("cvc", &self.cvc)?;
+        s.end()
     }
 }

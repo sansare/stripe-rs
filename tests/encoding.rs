@@ -35,7 +35,7 @@ fn deserialize_currency() {
 
 #[test]
 fn serialize_range_query() {
-    use stripe::{CustomerListParams, RangeBounds, RangeQuery};
+    use stripe::{ListCustomers, RangeBounds, RangeQuery};
 
     let query = RangeQuery::Bounds(RangeBounds {
         gt: None,
@@ -45,17 +45,17 @@ fn serialize_range_query() {
     });
     assert_eq!(urldecode(serde_qs::to_string(&query).unwrap()), "gte=1501598702&lt=1504233902");
 
-    let mut params = CustomerListParams::default();
+    let mut params = ListCustomers::new();
     params.created = Some(RangeQuery::eq(1501598702));
     params.limit = Some(3);
     assert_eq!(urldecode(serde_qs::to_string(&params).unwrap()), "created=1501598702&limit=3");
 
-    let mut params = CustomerListParams::default();
+    let mut params = ListCustomers::new();
     params.created = Some(RangeQuery::gte(1501598702));
     params.limit = Some(3);
     assert_eq!(urldecode(serde_qs::to_string(&params).unwrap()), "created[gte]=1501598702&limit=3");
 
-    let mut params = CustomerListParams::default();
+    let mut params = ListCustomers::new();
     params.created = Some(query);
     params.limit = Some(3);
     let encoded = urldecode(serde_qs::to_string(&params).unwrap());
@@ -68,7 +68,7 @@ fn urldecode(input: String) -> String {
 
 #[test]
 fn deserialize_payment_source_params() {
-    use stripe::{CardParams, PaymentSourceParams, SourceId, TokenId};
+    use stripe::{PaymentSourceParams, SourceId, TokenId};
 
     let examples = [
         (
@@ -81,30 +81,18 @@ fn deserialize_payment_source_params() {
                 "tok_189g322eZvKYlo2CeoPw2sdy".parse::<TokenId>().unwrap(),
             )),
         ),
-        (
-            json!({"object": "card", "exp_month": "12", "exp_year": "2017", "number": "1111222233334444"}),
-            Some(PaymentSourceParams::Card(CardParams {
-                exp_month: "12",
-                exp_year: "2017",
-                number: "1111222233334444",
-                name: None,
-                cvc: None,
-            })),
-        ),
-        // Error: Missing `{"object": "card"}`
-        (json!({"exp_month": "12", "exp_year": "2017", "number": "1111222233334444"}), None),
     ];
 
     for (value, expected) in &examples {
         let input = serde_json::to_string(value).unwrap();
-        let parsed: Option<PaymentSourceParams<'_>> = serde_json::from_str(&input).ok();
+        let parsed: Option<PaymentSourceParams> = serde_json::from_str(&input).ok();
         assert_eq!(json!(parsed), json!(expected));
     }
 }
 
 #[test]
 fn serialize_payment_source_params() {
-    use stripe::{CardParams, PaymentSourceParams, SourceId, TokenId};
+    use stripe::{PaymentSourceParams, SourceId, TokenId};
 
     let examples = [
         (
@@ -114,23 +102,6 @@ fn serialize_payment_source_params() {
         (
             PaymentSourceParams::Token("tok_189g322eZvKYlo2CeoPw2sdy".parse::<TokenId>().unwrap()),
             json!("tok_189g322eZvKYlo2CeoPw2sdy"),
-        ),
-        (
-            PaymentSourceParams::Card(CardParams {
-                exp_month: "12",
-                exp_year: "2017",
-                number: "1111222233334444",
-                name: None,
-                cvc: None,
-            }),
-            json!({
-                "object": "card",
-                "exp_month": "12",
-                "exp_year": "2017",
-                "number": "1111222233334444",
-                "name": null,
-                "cvc": null
-            }),
         ),
     ];
 
@@ -286,5 +257,56 @@ fn deserialize_customer_with_source() {
       "tax_info_verification": null
     });
     let result = serde_json::from_value::<Customer>(example);
+    assert!(result.is_ok(), "expected ok; was {:?}", result);
+}
+
+#[test]
+fn deserialize_checkout_event() {
+    use stripe::Event;
+
+    let example = json!({
+      "created": 1326853478,
+      "livemode": false,
+      "id": "evt_00000000000000",
+      "type": "checkout.session.completed",
+      "object": "event",
+      "request": null,
+      "pending_webhooks": 1,
+      "api_version": "2019-05-16",
+      "data": {
+        "object": {
+          "id": "cs_00000000000000",
+          "object": "checkout.session",
+          "billing_address_collection": null,
+          "cancel_url": "https://example.com/cancel",
+          "client_reference_id": null,
+          "customer": null,
+          "customer_email": null,
+          "display_items": [
+            {
+              "amount": 1500,
+              "currency": "usd",
+              "custom": {
+                "description": "Comfortable cotton t-shirt",
+                "images": null,
+                "name": "T-shirt"
+              },
+              "quantity": 2,
+              "type": "custom"
+            }
+          ],
+          "livemode": false,
+          "locale": null,
+          "payment_intent": "pi_00000000000000",
+          "payment_method_types": [
+            "card"
+          ],
+          "submit_type": null,
+          "subscription": null,
+          "success_url": "https://example.com/success"
+        }
+      }
+    });
+    let result = serde_json::from_value::<Event>(example);
     assert!(result.is_ok(), "expected ok; was {:?}", result);
 }

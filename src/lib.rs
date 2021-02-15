@@ -7,6 +7,7 @@
 // except according to those terms.
 
 #![doc(html_root_url = "https://docs.rs/stripe-rust/")]
+#![recursion_limit = "128"]
 
 //! This crate provides Rust bindings to the Stripe HTTP API.
 //!
@@ -15,12 +16,12 @@
 //! To get started, we need to create a client:
 //!
 //! ```rust
-//!   let client = stripe::Client::new("sk_test_YOUR_STRIPE_SECRET");
+//! let client = stripe::Client::new("sk_test_YOUR_STRIPE_SECRET");
 //! ```
 //!
 //! Then we can begin making requests as we'd like.  Most Stripe requests accept
-//! many optional parameters, so we usually get the `::default()` params and then
-//! set the ones we want from there.
+//! many optional parameters, so we usually get the `::new(...)` with any required
+//! params and then set the ones we want from there.
 //!
 //! Most requests for creating or updating a Stripe object use the same Rust struct,
 //! so you may frequently need to refer to the [official API docs](https://stripe.com/docs/api)
@@ -31,10 +32,10 @@
 //!
 //! # let client = stripe::Client::new("sk_test_YOUR_STRIPE_SECRET");
 //! let token = "tok_ID_FROM_CHECKOUT".parse().unwrap();
-//! let mut params = stripe::ChargeParams::default();
+//! let mut params = stripe::CreateCharge::new();
 //! // NOTE: Stripe represents currency in the lowest denominations (e.g. cents)
 //! params.amount = Some(1095); // e.g. $10.95
-//! params.source = Some(stripe::PaymentSourceParams::Token(token));
+//! params.source = Some(stripe::ChargeSourceParams::Token(token));
 //!
 //! // Example: Override currency to be in Canadian Dollars
 //! params.currency = Some(stripe::Currency::CAD);
@@ -46,17 +47,22 @@
 //! /* Listing Stripe Charges */
 //!
 //! # let client = stripe::Client::new("sk_test_YOUR_STRIPE_SECRET");
-//! let params = stripe::ChargeListParams::default();
+//! let params = stripe::ListCharges::new();
 //! let charges = stripe::Charge::list(&client, params).unwrap();
 //! println!("{:?}", charges); // =>  List { data: [Charge { id: "ch_12345", .. }] }
 //! ```
 
-#![deny(warnings)]
+#![allow(clippy::map_clone)]
+// N.B. not sure if this rule will break compatibility with older rust versions we might want to support
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::large_enum_variant)]
 
-#[cfg(not(feature = "async"))]
-mod client;
+mod client {
+    pub mod r#async;
+    #[cfg(feature = "blocking")]
+    pub mod blocking;
+}
+
 mod error;
 mod ids;
 mod params;
@@ -69,66 +75,41 @@ mod resources;
 //
 // See https://github.com/wyyerd/stripe-rs/issues/24#issuecomment-451514187
 // See https://github.com/rust-lang/rust/issues/44265
-#[cfg(feature = "async")]
-pub mod r#async;
-#[cfg(not(feature = "async"))]
-pub use crate::client::Client;
 pub use crate::error::{Error, ErrorCode, ErrorType, RequestError, WebhookError};
 pub use crate::ids::*;
-pub use crate::params::{Headers, List, Metadata, RangeBounds, RangeQuery, Timestamp};
+pub use crate::params::{
+    Expandable, Headers, IdOrCreate, List, Metadata, Object, RangeBounds, RangeQuery, Timestamp,
+};
 pub use crate::resources::*;
 
-#[cfg(not(feature = "async"))]
+#[cfg(feature = "blocking")]
 mod config {
-    use crate::error::Error;
+    pub(crate) use crate::client::blocking::{err, ok};
+    pub type Client = crate::client::blocking::Client;
 
     /// An alias for `Result`.
+    ///
+    /// If `blocking` is enabled, defined as:
     ///
     /// ```rust,ignore
     /// type Response<T> = Result<T, Error>;
     /// ```
     ///
-    /// If the `async` feature is enabled, this type is redefined as:
+    /// If the `async` feature is enabled, this type is defined as:
     ///
     /// ```rust,ignore
-    /// type Response<T> = Box<dyn Future<Item = T, Error = Error> + Send>
+    /// type Response<T> = Box<dyn Future<Result<T, Error>>>;
     /// ```
-    pub type Response<T> = Result<T, Error>;
-
-    pub(crate) type Client = crate::client::Client;
-
-    #[inline]
-    pub fn ok<T>(ok: T) -> Response<T> {
-        Ok(ok)
-    }
-
-    #[inline]
-    pub fn err<T>(err: Error) -> Response<T> {
-        Err(err)
-    }
+    ///
+    pub type Response<T> = crate::client::blocking::Response<T>;
 }
 
-#[cfg(feature = "async")]
+#[cfg(not(feature = "blocking"))]
 mod config {
-    use crate::error::Error;
-    use futures::future::{self, Future};
-
-    // TODO: We'd rather use `impl Future<Result<T, Error>>` but that isn't so
-    //       easy to accomplish in generic code with futures 0.1.x
-    pub type Response<T> = Box<dyn Future<Item = T, Error = Error> + Send>;
-
-    pub(crate) type Client = crate::r#async::Client;
-
-    #[inline]
-    pub(crate) fn ok<T: Send + 'static>(ok: T) -> Response<T> {
-        Box::new(future::ok(ok))
-    }
-
-    #[inline]
-    pub(crate) fn err<T: Send + 'static>(err: Error) -> Response<T> {
-        Box::new(future::err(err))
-    }
+    pub(crate) use crate::client::r#async::{err, ok};
+    pub type Client = crate::client::r#async::Client;
+    pub type Response<T> = crate::client::r#async::Response<T>;
 }
 
-// N.B. export for doc purposes
+pub use self::config::Client;
 pub use self::config::Response;

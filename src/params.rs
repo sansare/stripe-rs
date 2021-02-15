@@ -1,25 +1,160 @@
 use crate::config::{err, ok, Client, Response};
 use crate::error::Error;
+use crate::resources::ApiVersion;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Clone, Default)]
+pub struct AppInfo {
+    pub name: String,
+    pub url: Option<String>,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Default)]
 pub struct Headers {
-    pub stripe_account: Option<String>,
     pub client_id: Option<String>,
+    pub stripe_version: Option<ApiVersion>,
+    pub stripe_account: Option<String>,
+    pub user_agent: Option<String>,
 }
 
-pub trait Identifiable {
-    fn id(&self) -> &str;
+/// Implemented by types which represent stripe objects.
+pub trait Object {
+    /// The canonical id type for this object.
+    type Id;
+    /// The id of the object.
+    fn id(&self) -> Self::Id;
+    /// The object's type, typically represented in wire format as the `object` property.
+    fn object(&self) -> &'static str;
 }
 
+/// A deleted object.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Deleted<T> {
+    /// Unique identifier for the object.
+    pub id: T,
+    /// Always true for a deleted object.
+    pub deleted: bool,
+}
+
+/// The `Expand` struct is used to serialize `expand` arguments in retrieve and list apis.
+#[doc(hidden)]
+#[derive(Serialize)]
+pub struct Expand<'a> {
+    #[serde(skip_serializing_if = "Expand::is_empty")]
+    pub expand: &'a [&'a str],
+}
+
+impl Expand<'_> {
+    pub(crate) fn is_empty(expand: &[&str]) -> bool {
+        expand.is_empty()
+    }
+}
+
+/// An id or object.
+///
+/// By default stripe will return an id for most fields, but if more detail is
+/// necessary the `expand` parameter can be provided to ask for the id to be
+/// loaded as an object instead:
+///
+/// ```rust,ignore
+/// Charge::retrieve(&client, &charge_id, &["invoice.customer"])
+/// ```
+///
+/// See [https://stripe.com/docs/api/expanding_objects](https://stripe.com/docs/api/expanding_objects).
+#[derive(Clone, Debug, Serialize, Deserialize)] // TODO: Implement deserialize by hand for better error messages
+#[serde(untagged)]
+pub enum Expandable<T: Object> {
+    Id(T::Id),
+    Object(Box<T>),
+}
+
+impl<T> Expandable<T>
+where
+    T: Object,
+    T::Id: Clone,
+{
+    pub fn id(&self) -> T::Id {
+        match self {
+            Expandable::Id(id) => id.clone(),
+            Expandable::Object(obj) => obj.id(),
+        }
+    }
+}
+
+impl<T: Object> Expandable<T> {
+    pub fn is_object(&self) -> bool {
+        match self {
+            Expandable::Id(_) => false,
+            Expandable::Object(_) => true,
+        }
+    }
+
+    pub fn as_object(&self) -> Option<&T> {
+        match self {
+            Expandable::Id(_) => None,
+            Expandable::Object(obj) => Some(&obj),
+        }
+    }
+
+    #[deprecated(
+        note = "Renamed `into_object` per rust api design guidelines (may be removed in v0.12)"
+    )]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn to_object(self) -> Option<T> {
+        match self {
+            Expandable::Id(_) => None,
+            Expandable::Object(obj) => Some(*obj),
+        }
+    }
+
+    pub fn into_object(self) -> Option<T> {
+        match self {
+            Expandable::Id(_) => None,
+            Expandable::Object(obj) => Some(*obj),
+        }
+    }
+}
+
+/// Implemented by types which support cursor-based pagination,
+/// typically with an id, allowing them to be fetched using a `List`
+/// returned by the corresponding "list" api request.
+pub trait Paginate {
+    type Cursor: AsCursor;
+    fn cursor(&self) -> Self::Cursor;
+}
+
+pub trait AsCursor: AsRef<str> {}
+
+impl<'a> AsCursor for &'a str {}
+impl AsCursor for String {}
+
+impl<T> Paginate for T
+where
+    T: Object,
+    T::Id: AsCursor,
+{
+    type Cursor = T::Id;
+    fn cursor(&self) -> Self::Cursor {
+        self.id()
+    }
+}
+
+/// A single page of a cursor-paginated list of an object.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct List<T> {
     pub data: Vec<T>,
     pub has_more: bool,
     pub total_count: Option<u64>,
     pub url: String,
+}
+
+impl<T> Default for List<T> {
+    fn default() -> Self {
+        List { data: Vec::new(), has_more: false, total_count: None, url: String::new() }
+    }
 }
 
 impl<T: Clone> Clone for List<T> {
@@ -51,12 +186,12 @@ impl<T: DeserializeOwned + Send + 'static> List<T> {
     }
 }
 
-impl<T: Identifiable + DeserializeOwned + Send + 'static> List<T> {
+impl<T: Paginate + DeserializeOwned + Send + 'static> List<T> {
     /// Repeatedly queries Stripe for more data until all elements in list are fetched, using
     /// Stripe's default page size.
     ///
-    /// Not supported by `stripe::async::Client`.
-    #[cfg(not(feature = "async"))]
+    /// Requires `feature = "blocking"`.
+    #[cfg(feature = "blocking")]
     pub fn get_all(self, client: &Client) -> Response<Vec<T>> {
         let mut data = Vec::new();
         let mut next = self;
@@ -73,10 +208,10 @@ impl<T: Identifiable + DeserializeOwned + Send + 'static> List<T> {
         Ok(data)
     }
 
-    /// Fetch additional page of data from stripe
+    /// Fetch an additional page of data from stripe.
     pub fn next(&self, client: &Client) -> Response<List<T>> {
-        if let Some(last_id) = self.data.last().map(|d| d.id()) {
-            List::get_next(client, &self.url, last_id)
+        if let Some(last_id) = self.data.last().map(|d| d.cursor()) {
+            List::get_next(client, &self.url, last_id.as_ref())
         } else {
             ok(List {
                 data: Vec::new(),
@@ -138,16 +273,23 @@ impl<T> RangeQuery<T> {
     /// Filter results to be before to a given value
     pub fn lt(value: T) -> RangeQuery<T> {
         let mut bounds = RangeBounds::default();
-        bounds.gt = Some(value);
+        bounds.lt = Some(value);
         RangeQuery::Bounds(bounds)
     }
 
     /// Filter results to be before or equal to a given value
     pub fn lte(value: T) -> RangeQuery<T> {
         let mut bounds = RangeBounds::default();
-        bounds.gte = Some(value);
+        bounds.lte = Some(value);
         RangeQuery::Bounds(bounds)
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum IdOrCreate<'a, T> {
+    Id(&'a str),
+    Create(&'a T),
 }
 
 // NOTE: Only intended to handle conversion from ASCII CamelCase to SnakeCase

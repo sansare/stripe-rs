@@ -7,8 +7,8 @@ use std::num::ParseIntError;
 pub enum Error {
     /// An error reported by Stripe in the response body.
     Stripe(RequestError),
-    /// A networking error communicating with the Stripe server.
-    Http(reqwest::Error),
+    /// An http or networking error communicating with the Stripe server.
+    Http(HttpError),
     /// An error reading the response body.
     Io(std::io::Error),
     /// An error serializing a request before it is sent to stripe.
@@ -22,14 +22,19 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn serialize<T>(err: T) -> Error
+    #[allow(dead_code)]
+    pub(crate) fn timeout() -> Error {
+        Error::Http(HttpError::Timeout)
+    }
+
+    pub(crate) fn serialize<T>(err: T) -> Error
     where
         T: std::error::Error + Send + 'static,
     {
         Error::Serialize(Box::new(err))
     }
 
-    pub fn deserialize<T>(err: T) -> Error
+    pub(crate) fn deserialize<T>(err: T) -> Error
     where
         T: std::error::Error + Send + 'static,
     {
@@ -39,6 +44,7 @@ impl Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(deprecated)]
         f.write_str(std::error::Error::description(self))?;
         match *self {
             Error::Stripe(ref err) => write!(f, ": {}", err),
@@ -84,15 +90,50 @@ impl From<RequestError> for Error {
     }
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(err: reqwest::Error) -> Error {
-        Error::Http(err)
+impl From<hyper::Error> for Error {
+    fn from(err: hyper::Error) -> Error {
+        Error::Http(HttpError::Stream(err))
     }
 }
 
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Error {
         Error::Io(err)
+    }
+}
+
+#[derive(Debug)]
+pub enum HttpError {
+    /// An error handling HTTP streams.
+    Stream(hyper::Error),
+    /// The request timed out.
+    Timeout,
+}
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(deprecated)]
+        match *self {
+            HttpError::Stream(ref err) => err.fmt(f),
+            HttpError::Timeout => f.write_str(std::error::Error::description(self)),
+        }
+    }
+}
+
+impl std::error::Error for HttpError {
+    fn description(&self) -> &str {
+        #[allow(deprecated)]
+        match *self {
+            HttpError::Stream(ref err) => err.description(),
+            HttpError::Timeout => "request timed out",
+        }
+    }
+
+    fn cause(&self) -> Option<&dyn std::error::Error> {
+        match *self {
+            HttpError::Stream(ref err) => Some(err),
+            HttpError::Timeout => None,
+        }
     }
 }
 
@@ -146,6 +187,7 @@ pub enum ErrorCode {
     BankAccountExists,
     BankAccountUnusable,
     BankAccountUnverified,
+    BankAccountVerificationFailed,
     BitcoinUpgradeRequired,
     CardDeclined,
     ChargeAlreadyCaptured,
@@ -286,12 +328,11 @@ pub enum WebhookError {
     BadTimestamp(i64),
     /// An error deserializing an event received from stripe.
     BadParse(serde_json::Error),
-    /// Additional signature with a fake v0 scheme, for test-mode events is missing.
-    MissingTestmodeSignature,
 }
 
 impl std::fmt::Display for WebhookError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(deprecated)]
         f.write_str(std::error::Error::description(self))?;
         match *self {
             WebhookError::BadKey => Ok(()),
@@ -299,7 +340,6 @@ impl std::fmt::Display for WebhookError {
             WebhookError::BadSignature => Ok(()),
             WebhookError::BadTimestamp(ref err) => write!(f, ": {}", err),
             WebhookError::BadParse(ref err) => write!(f, ": {}", err),
-            WebhookError::MissingTestmodeSignature => Ok(()),
         }
     }
 }
@@ -312,7 +352,6 @@ impl std::error::Error for WebhookError {
             WebhookError::BadSignature => "error comparing signatures",
             WebhookError::BadTimestamp(_) => "error comparing timestamps - over tolerance",
             WebhookError::BadParse(_) => "error parsing event object",
-            WebhookError::MissingTestmodeSignature => "error parsing fake v0 scheme",
         }
     }
 
@@ -323,7 +362,6 @@ impl std::error::Error for WebhookError {
             WebhookError::BadSignature => None,
             WebhookError::BadTimestamp(_) => None,
             WebhookError::BadParse(ref err) => Some(err),
-            WebhookError::MissingTestmodeSignature => None,
         }
     }
 }

@@ -1,10 +1,12 @@
 use crate::error::WebhookError;
+use crate::ids::EventId;
 use crate::resources::*;
+
 use chrono::Utc;
-#[cfg(feature = "webhooks")]
+#[cfg(feature = "webhook-events")]
 use hmac::{Hmac, Mac};
 use serde_derive::{Deserialize, Serialize};
-#[cfg(feature = "webhooks")]
+#[cfg(feature = "webhook-events")]
 use sha2::Sha256;
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, Eq, PartialEq, Hash)]
@@ -51,6 +53,8 @@ pub enum EventType {
     ChargeDisputeUpdated,
     #[serde(rename = "charge.refund.updated")]
     ChargeRefundUpdated,
+    #[serde(rename = "checkout.session.completed")]
+    CheckoutSessionCompleted,
     #[serde(rename = "coupon.created")]
     CouponCreated,
     #[serde(rename = "coupon.deleted")]
@@ -87,14 +91,26 @@ pub enum EventType {
     FileCreated,
     #[serde(rename = "invoice.created")]
     InvoiceCreated,
+    #[serde(rename = "invoice.deleted")]
+    InvoiceDeleted,
+    #[serde(rename = "invoice.finalized")]
+    InvoiceFinalized,
+    #[serde(rename = "invoice.marked_uncollectible")]
+    InvoiceMarkedUncollectible,
+    #[serde(rename = "invoice.payment_action_required")]
+    InvoicePaymentActionRequired,
     #[serde(rename = "invoice.payment_failed")]
     InvoicePaymentFailed,
     #[serde(rename = "invoice.payment_succeeded")]
     InvoicePaymentSucceeded,
+    #[serde(rename = "invoice.sent")]
+    InvoiceSent,
     #[serde(rename = "invoice.updated")]
     InvoiceUpdated,
     #[serde(rename = "invoice.upcoming")]
     InvoiceUpcoming,
+    #[serde(rename = "invoice.voided")]
+    InvoiceVoided,
     #[serde(rename = "invoiceitem.created")]
     InvoiceItemCreated,
     #[serde(rename = "invoiceitem.deleted")]
@@ -173,10 +189,10 @@ pub enum EventType {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Event {
+    pub id: EventId,
     #[serde(rename = "type")]
     pub event_type: EventType,
     pub data: EventData,
-    pub livemode: bool,
     // ...
 }
 
@@ -196,9 +212,13 @@ pub enum EventObject {
     Balance(Balance),
     BankAccount(BankAccount),
     Charge(Charge),
+    Customer(Customer),
     Dispute(Dispute),
+    #[serde(rename = "checkout.session")]
+    CheckoutSession(CheckoutSession),
     File(File),
     Invoice(Invoice),
+    #[serde(rename = "invoiceitem")]
     InvoiceItem(InvoiceItem),
     Order(Order),
     OrderReturn(OrderReturn),
@@ -210,26 +230,25 @@ pub enum EventObject {
     Review(Review),
     Sku(Sku),
     Subscription(Subscription),
-    Transaction(Transaction),
     Transfer(Transfer),
 }
 
-#[cfg(feature = "webhooks")]
+#[cfg(feature = "webhook-events")]
 pub struct Webhook {
     current_timestamp: i64,
 }
 
-#[cfg(feature = "webhooks")]
+#[cfg(feature = "webhook-events")]
 impl Webhook {
-    pub fn new() -> Self {
-        Self { current_timestamp: Utc::now().timestamp() }
+    pub fn construct_event(payload: &str, sig: &str, secret: &str) -> Result<Event, WebhookError> {
+        Self { current_timestamp: Utc::now().timestamp() }.do_construct_event(payload, sig, secret)
     }
 
-    pub fn construct_event(
+    fn do_construct_event(
         self,
-        payload: String,
-        sig: String,
-        secret: String,
+        payload: &str,
+        sig: &str,
+        secret: &str,
     ) -> Result<Event, WebhookError> {
         // Get Stripe signature from header
         let signature = Signature::parse(&sig)?;
@@ -241,7 +260,7 @@ impl Webhook {
             Hmac::<Sha256>::new_varkey(secret.as_bytes()).map_err(|_| WebhookError::BadKey)?;
         mac.input(signed_payload.as_bytes());
         let mac_result = mac.result();
-        let hex = Self::to_hex(mac_result.code().as_slice());
+        let hex = to_hex(mac_result.code().as_slice());
         if hex != signature.v1 {
             return Err(WebhookError::BadSignature);
         }
@@ -253,21 +272,22 @@ impl Webhook {
 
         serde_json::from_str(&payload).map_err(WebhookError::BadParse)
     }
-
-    pub const CHARS: &'static [u8] = b"0123456789abcdef";
-
-    pub fn to_hex(bytes: &[u8]) -> String {
-        let mut v = Vec::with_capacity(bytes.len() * 2);
-        for &byte in bytes {
-            v.push(Self::CHARS[(byte >> 4) as usize]);
-            v.push(Self::CHARS[(byte & 0xf) as usize]);
-        }
-
-        unsafe { String::from_utf8_unchecked(v) }
-    }
 }
 
-#[cfg(feature = "webhooks")]
+// TODO: If there is a lightweight hex crate, we should just rely on that instead.
+fn to_hex(bytes: &[u8]) -> String {
+    const CHARS: &[u8] = b"0123456789abcdef";
+
+    let mut v = Vec::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        v.push(CHARS[(byte >> 4) as usize]);
+        v.push(CHARS[(byte & 0xf) as usize]);
+    }
+
+    unsafe { String::from_utf8_unchecked(v) }
+}
+
+#[cfg(feature = "webhook-events")]
 #[derive(Debug)]
 struct Signature<'r> {
     t: i64,
@@ -275,7 +295,7 @@ struct Signature<'r> {
     v0: Option<&'r str>,
 }
 
-#[cfg(feature = "webhooks")]
+#[cfg(feature = "webhook-events")]
 impl<'r> Signature<'r> {
     fn parse(raw: &'r str) -> Result<Signature<'r>, WebhookError> {
         use std::collections::HashMap;
@@ -301,7 +321,7 @@ impl<'r> Signature<'r> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "webhooks")]
+    #[cfg(feature = "webhook-events")]
     #[test]
     fn test_signature_parse() {
         use super::Signature;
@@ -327,5 +347,60 @@ mod tests {
             signature.v0,
             Some("6ffbb59b2300aae63f272406069a9788598b792a944a07aba816edb039989a39")
         );
+    }
+
+    #[cfg(feature = "webhook-events")]
+    #[test]
+    fn test_webhook_construct_event() {
+        let payload = r#"{
+  "id": "evt_123",
+  "object": "event",
+  "account": "acct_123",
+  "api_version": "2017-05-25",
+  "created": 1533204620,
+  "data": {
+    "object": {
+      "id": "ii_123",
+      "object": "invoiceitem",
+      "amount": 1000,
+      "currency": "usd",
+      "customer": "cus_123",
+      "date": 1533204620,
+      "description": "Test Invoice Item",
+      "discountable": false,
+      "invoice": "in_123",
+      "livemode": false,
+      "metadata": {},
+      "period": {
+        "start": 1533204620,
+        "end": 1533204620
+      },
+      "plan": null,
+      "proration": false,
+      "quantity": null,
+      "subscription": null
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": "req_123",
+    "idempotency_key": "idempotency-key-123"
+  },
+  "type": "invoiceitem.created"
+}
+"#;
+        let event_timestamp = 1533204620;
+        let secret = "webhook_secret".to_string();
+        let signature = format!("t={},v1=f0bdba6d4eacbd8ad8a3bbadd7248e633ec1477f7899c124c51b39405fa36613,v0=63f3a72374a733066c4be69ed7f8e5ac85c22c9f0a6a612ab9a025a9e4ee7eef", event_timestamp);
+
+        let webhook = super::Webhook { current_timestamp: event_timestamp };
+
+        let event = webhook
+            .do_construct_event(payload, &signature, &secret)
+            .expect("Failed to construct event");
+
+        assert_eq!(event.event_type, super::EventType::InvoiceItemCreated);
+        assert_eq!(event.id.to_string(), "evt_123");
     }
 }
