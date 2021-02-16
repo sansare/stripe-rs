@@ -39,6 +39,7 @@ impl Error {
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(deprecated)]
         f.write_str(std::error::Error::description(self))?;
         match *self {
             Error::Stripe(ref err) => write!(f, ": {}", err),
@@ -292,6 +293,7 @@ pub enum WebhookError {
 
 impl std::fmt::Display for WebhookError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[allow(deprecated)]
         f.write_str(std::error::Error::description(self))?;
         match *self {
             WebhookError::BadKey => Ok(()),
